@@ -8,7 +8,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func GetUserList(api *slack.Client) (*[]data.UserTimeData, error) {
+func GetUserMap(api *slack.Client) (*map[string]data.UserTimeData, error) {
 
 	// defer func(){
 	// 	if(recover()){
@@ -20,7 +20,8 @@ func GetUserList(api *slack.Client) (*[]data.UserTimeData, error) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	usertimelist := make([]data.UserTimeData, 0, 100)
+	// usertimelist := make([]data.UserTimeData, 0, 100)
+	usermapData := make(map[string]data.UserTimeData)
 	for _, user := range Users {
 		if !user.IsBot && !user.IsAppUser && user.ID != "USLACKBOT" {
 			temp := data.UserTimeData{
@@ -29,10 +30,20 @@ func GetUserList(api *slack.Client) (*[]data.UserTimeData, error) {
 				Name:          user.Name,
 				TotalDuration: 0,
 			}
-			usertimelist = append(usertimelist, temp)
+			// usertimelist = append(usertimelist, temp)
+			usermapData[user.ID] = temp
 		}
 
 	}
-	log.Println(usertimelist)
-	return &usertimelist, nil
+	log.Println(usermapData)
+	return &usermapData, nil
+}
+
+func GenerateListFromMap(usermap *map[string]data.UserTimeData) *[]data.UserTimeData {
+	userList := make([]data.UserTimeData, 0, 100)
+
+	for key := range *usermap {
+		userList = append(userList, (*usermap)[key])
+	}
+	return &userList
 }
