@@ -2,24 +2,23 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/slack-go/slack/socketmode"
 
-	"slack-user-attendence-app/constants"
+	"slack-user-attendence-app/config"
 	"slack-user-attendence-app/data"
+	"slack-user-attendence-app/utility"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 
-	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
@@ -27,55 +26,63 @@ import (
 
 func main() {
 	// appToken := os.Getenv("SLACK_APP_TOKEN")
-	// appToken := "xapp-1-A03HM4PJEQK-3611823453777-8d82cbd55cd6343b8125d000868638c799d55bee02af38f08cf216a3e0c797b1"
-	// if appToken == "" {
-	// 	fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must be set.\n")
-	// 	os.Exit(1)
-	// }
+	appToken := "xapp-1-A03HM4PJEQK-3611823453777-8d82cbd55cd6343b8125d000868638c799d55bee02af38f08cf216a3e0c797b1"
+	if appToken == "" {
+		fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must be set.\n")
+		os.Exit(1)
+	}
 
-	// if !strings.HasPrefix(appToken, "xapp-") {
-	// 	fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must have the prefix \"xapp-\".")
-	// }
+	if !strings.HasPrefix(appToken, "xapp-") {
+		fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must have the prefix \"xapp-\".")
+	}
 
-	// // botToken := os.Getenv("SLACK_BOT_TOKEN")
-	// botToken := "xoxb-3584532805223-3592570415062-IzvofH7PCKvE4OFSwBGGz8y6"
-	// if botToken == "" {
-	// 	fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must be set.\n")
-	// 	os.Exit(1)
-	// }
+	// botToken := os.Getenv("SLACK_BOT_TOKEN")
+	botToken := "xoxb-3584532805223-3592570415062-IzvofH7PCKvE4OFSwBGGz8y6"
+	if botToken == "" {
+		fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must be set.\n")
+		os.Exit(1)
+	}
 
-	// if !strings.HasPrefix(botToken, "xoxb-") {
-	// 	fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must have the prefix \"xoxb-\".")
-	// }
+	if !strings.HasPrefix(botToken, "xoxb-") {
+		fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must have the prefix \"xoxb-\".")
+	}
 
-	// api := slack.New(
-	// 	botToken,
-	// 	slack.OptionDebug(true),
-	// 	slack.OptionLog(log.New(os.Stdout, "api: ", log.Lshortfile|log.LstdFlags)),
-	// 	slack.OptionAppLevelToken(appToken),
-	// )
+	api := slack.New(
+		botToken,
+		slack.OptionDebug(true),
+		slack.OptionLog(log.New(os.Stdout, "api: ", log.Lshortfile|log.LstdFlags)),
+		slack.OptionAppLevelToken(appToken),
+	)
 
-	// client := socketmode.New(
-	// 	api,
-	// 	socketmode.OptionDebug(true),
-	// 	socketmode.OptionLog(log.New(os.Stdout, "socketmode: ", log.Lshortfile|log.LstdFlags)),
-	// )
+	client := socketmode.New(
+		api,
+		socketmode.OptionDebug(true),
+		socketmode.OptionLog(log.New(os.Stdout, "socketmode: ", log.Lshortfile|log.LstdFlags)),
+	)
 
-	// go event(client, api)
+	go event(client, api)
 
-	// userMap, err := utility.GetUserMap(api)
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// }
-	// userList := utility.GenerateListFromMap(userMap)
+	userMap, err := utility.GetUserMap(api)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	userList := utility.GenerateListFromMap(userMap)
 
-	// schedulerChannel := make(chan string)
+	schedulerChannel := make(chan string)
 
-	// go scheduler(userList, api, schedulerChannel)
+	ctx := context.Background()
+	conf, err := google.JWTConfigFromJSON([]byte(config.GoogleServiceJsonKey), sheets.SpreadsheetsScope)
+	checkError(err)
 
-	googleSheetScheduler(nil)
+	clientSheet := conf.Client(context.TODO())
+	srv, err := sheets.NewService(ctx, option.WithHTTPClient(clientSheet))
+	checkError(err)
 
-	// client.Run()
+	go scheduler(userList, api, schedulerChannel)
+
+	go googleSheetScheduler(userList, srv)
+
+	client.Run()
 }
 
 func checkError(err error) {
@@ -84,36 +91,90 @@ func checkError(err error) {
 	}
 }
 
-func getClient(config *oauth2.Config) *http.Client {
-	tok := &oauth2.Token{}
-	err := json.NewDecoder(strings.NewReader(constants.GoogleServiceJsonKey)).Decode(tok)
-	checkError(err)
-	return config.Client(context.Background(), tok)
-}
+func googleSheetScheduler(userList *[]data.UserTimeData, srv *sheets.Service) {
 
-func googleSheetScheduler(userList *[]data.UserTimeData) {
+	for {
+		month := time.Now().Month()
+		year := time.Now().Year()
 
-	ctx := context.Background()
-	conf, err := google.JWTConfigFromJSON([]byte(constants.GoogleServiceJsonKey), sheets.SpreadsheetsScope)
-	checkError(err)
+		userrange := month.String() + " " + strconv.Itoa(year) + "!" + "A" + "1"
 
-	client := conf.Client(context.TODO())
-	srv, err := sheets.NewService(ctx, option.WithHTTPClient(client))
-	checkError(err)
+		writeRange := month.String() + " " + strconv.Itoa(year) + "!" + utility.GetColumnName(time.Now().Day()*3+1) + "1"
+		_, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, userrange).Do()
+		if err != nil {
+			batch := sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{&sheets.Request{AddSheet: &sheets.AddSheetRequest{Properties: &sheets.SheetProperties{Title: month.String() + " " + strconv.Itoa(year)}}}}}
 
-	spreadsheetID := "1DEbBhHG9ci7z74MM5uu6sCrsQ16eWDWRuEv_wg7bX84"
-	readRange := "IntUnsecured62167!A2:C"
-	resp, err := srv.Spreadsheets.Values.Get(spreadsheetID, readRange).Do()
-	checkError(err)
-
-	if len(resp.Values) == 0 {
-		fmt.Println("No data found.")
-	} else {
-		fmt.Println("Name, Major:")
-		for _, row := range resp.Values {
-			fmt.Printf("%s, %s\n", row[0], row[2])
+			_, err := srv.Spreadsheets.BatchUpdate(config.SpreadsheetID, &batch).Do()
+			if err != nil {
+				log.Fatalf("Unable to retrieve data from sheet. %v", err)
+			}
+			// _, err = srv.Spreadsheets.Values.Get(config.SpreadsheetID, writeRange).Do()
+			// if err != nil {
+			// 	log.Fatalf("Unable to retrieve data from sheet. %v", err)
+			// }
 		}
+
+		var ur sheets.ValueRange
+		ur.Values = append(ur.Values, []interface{}{"ID", "Name"})
+
+		var wr sheets.ValueRange
+		wr.Values = append(wr.Values, []interface{}{"TimeSpent - Seconds", "Day " + strconv.Itoa(time.Now().Day()) + " - Attendance"})
+
+		var active string
+
+		for idx := range *userList {
+			ur.Values = append(ur.Values, []interface{}{(*userList)[idx].UserId, (*userList)[idx].Name})
+			if (*userList)[idx].TotalDuration > 100 {
+				active = "Present"
+			} else {
+				active = "Absent"
+			}
+			wr.Values = append(wr.Values, []interface{}{strconv.Itoa(int((*userList)[idx].TotalDuration)), active})
+		}
+
+		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, userrange, &ur).ValueInputOption("RAW").Do()
+		if err != nil {
+			log.Fatalf("Unable to retrieve data from sheet. %v", err)
+		}
+
+		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, &wr).ValueInputOption("RAW").Do()
+		if err != nil {
+			log.Fatalf("Unable to retrieve data from sheet. %v", err)
+		}
+
+		time.Sleep(10 * time.Second)
+
 	}
+
+	// spreadsheetID := "1s0fqIe1k5uRHz6TV9NflCZl0IDu78BJcS1_NWEjmgtQ"
+	// readRange := "IntUnsecured62167!A2:C"
+	// resp, err := srv.Spreadsheets.Values.Get(spreadsheetID, readRange).Do()
+	// checkError(err)
+
+	// if len(resp.Values) == 0 {
+	// 	fmt.Println("No data found.")
+	// } else {
+	// 	fmt.Println("Name, Major:")
+	// 	for _, row := range resp.Values {
+	// 		fmt.Printf("%s, %s\n", row[0], row[1])
+	// 	}
+	// }
+
+	// writeRange := "March 2022!A1"
+
+	// var vr sheets.ValueRange
+
+	// myval := []interface{}{"One", "Two", "Three"}
+	// vr.Values = append(vr.Values, myval)
+
+	// batchUpdate.Do()
+
+	// _, err = srv.Spreadsheets.Values.Update(spreadsheetID, writeRange, )
+	// srv.Spreadsheets.Create()
+	// _, err = srv.Spreadsheets.Values.Update(spreadsheetID, writeRange, &vr).ValueInputOption("RAW").Do()
+	// if err != nil {
+	// 	log.Fatalf("Unable to retrieve data from sheet. %v", err)
+	// }
 }
 
 func scheduler(userList *[]data.UserTimeData, api *slack.Client, mainChannel chan string) {
