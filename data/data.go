@@ -19,6 +19,7 @@ type UserTimeData struct {
 	LastChecked   int64
 	ActiveEpoch   int64
 	AwayEpoch     int64
+	TotalDuration int64
 }
 
 func test() {

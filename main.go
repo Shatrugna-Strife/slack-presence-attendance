@@ -6,9 +6,11 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/slack-go/slack/socketmode"
 
+	"slack-user-attendence-app/data"
 	"slack-user-attendence-app/utility"
 
 	"github.com/slack-go/slack"
@@ -17,7 +19,7 @@ import (
 
 func main() {
 	// appToken := os.Getenv("SLACK_APP_TOKEN")
-	appToken := "xapp-1-A03FTQK751R-3586199122002-4f4223ea6867aa909080444bdcddd2a88698c1267a8e85884e6d1bf8bd430bf0"
+	appToken := "xapp-1-A03HM4PJEQK-3611823453777-8d82cbd55cd6343b8125d000868638c799d55bee02af38f08cf216a3e0c797b1"
 	if appToken == "" {
 		fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must be set.\n")
 		os.Exit(1)
@@ -28,7 +30,7 @@ func main() {
 	}
 
 	// botToken := os.Getenv("SLACK_BOT_TOKEN")
-	botToken := "xoxb-3537805463267-3523293428999-OpiYeQDdUzz89AUTiqxqNmil"
+	botToken := "xoxb-3584532805223-3592570415062-IzvofH7PCKvE4OFSwBGGz8y6"
 	if botToken == "" {
 		fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must be set.\n")
 		os.Exit(1)
@@ -53,9 +55,101 @@ func main() {
 
 	go event(client, api)
 
-	utility.GetUserList(api)
+	userList, err := utility.GetUserList(api)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	schedulerChannel := make(chan string)
+
+	go scheduler(userList, api, schedulerChannel)
 
 	client.Run()
+}
+
+func scheduler(userList *[]data.UserTimeData, api *slack.Client, mainChannel chan string) {
+	var apiLimitPerMinute int = 50
+
+	currentCount := 0
+
+	start := time.Now().Unix()
+
+	apiChannel := make(chan uint64)
+
+	for idx, _ := range *userList {
+		(*userList)[idx].LastChecked = time.Now().Unix()
+	}
+
+	// for idx, _ := range *userList {
+	// 	go getUserPresenceGoroutine(&(*userList)[idx], api, apiChannel)
+	// }
+	go func() {
+		apiChannel <- 0
+	}()
+
+	for {
+		select {
+		case mainEvent := <-mainChannel:
+			if mainEvent == "exit" {
+				return
+			}
+			// log.Println(mainEvent)
+		case dude := <-apiChannel:
+			log.Println(dude)
+			if currentCount == apiLimitPerMinute {
+				duration := time.Now().Unix() - start
+				if duration < 60 {
+					currentCount = 0
+					//start = time.Now().Unix()
+					go func() {
+						time.Sleep(time.Duration(60-duration) * time.Second)
+						start = time.Now().Unix()
+						apiChannel <- dude
+					}()
+
+				} else {
+					currentCount = 0
+					start = time.Now().Unix()
+				}
+			} else {
+				if dude > uint64(len(*userList))-1 {
+					go getUserPresenceGoroutine(&(*userList)[0], api, apiChannel, 0)
+					currentCount += 1
+				} else {
+					go getUserPresenceGoroutine(&(*userList)[dude], api, apiChannel, dude)
+					currentCount += 1
+				}
+			}
+		}
+	}
+
+	fmt.Println(apiLimitPerMinute)
+}
+
+func getUserPresenceGoroutine(user *data.UserTimeData, api *slack.Client, apiChannel chan uint64, index uint64) {
+	presenceData, err := api.GetUserPresence((*user).UserId)
+	log.Println(presenceData, err, user.Name, user.TotalDuration)
+	if err != nil {
+		log.Println(err)
+		apiChannel <- index + 1
+	}
+	if presenceData.Presence == string(data.Active) {
+		if user.PresenceState == data.Active {
+			user.TotalDuration += time.Now().Unix() - user.LastChecked
+		}
+		user.PresenceState = data.Active
+		user.ActiveEpoch = time.Now().Unix()
+		user.LastChecked = time.Now().Unix()
+		apiChannel <- index + 1
+	} else {
+		if user.PresenceState == data.Active {
+			user.TotalDuration += time.Now().Unix() - user.LastChecked
+		}
+		user.PresenceState = data.Away
+		user.AwayEpoch = time.Now().Unix()
+		user.LastChecked = time.Now().Unix()
+		apiChannel <- index + 1
+	}
 }
 
 func event(client *socketmode.Client, api *slack.Client) {
