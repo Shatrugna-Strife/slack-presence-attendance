@@ -22,9 +22,9 @@ const GoogleServiceJsonKey = `{
   "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/sheetedit%40webrtcproject-341403.iam.gserviceaccount.com"
 }`
 
-var StartTimeStamp = data.TimeStampCustom{Hour: 10, Minute: 0} // Hours - 24 format
+var StartTimeStamp = data.TimeStampCustom{Hour: 1, Minute: 0} // Hours - 24 format
 
-var EndTimeStamp = data.TimeStampCustom{Hour: 18, Minute: 30}
+var EndTimeStamp = data.TimeStampCustom{Hour: 23, Minute: 0}
 
 const DaySchedulerDelay = 1 // minutes
 

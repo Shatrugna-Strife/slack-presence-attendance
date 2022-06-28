@@ -159,21 +159,22 @@ func googleSheetScheduler(userList *[]data.UserTimeData, srv *sheets.Service, ma
 			year := time.Now().Year()
 			day := time.Now().Day()
 
-			userrange := month.String() + " " + strconv.Itoa(year) + "!" + "A" + "1"
+			userrange := month.String() + " " + strconv.Itoa(year) + "!" + "A1" + ":A2"
 
 			writeRange := month.String() + " " + strconv.Itoa(year) + "!" + utility.GetColumnName(day*3+1) + "1"
 			_, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, userrange).Do()
 			if err != nil {
-				batch := sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{&sheets.Request{AddSheet: &sheets.AddSheetRequest{Properties: &sheets.SheetProperties{Title: month.String() + " " + strconv.Itoa(year)}}}}}
+				batch := sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{{AddSheet: &sheets.AddSheetRequest{Properties: &sheets.SheetProperties{Title: month.String() + " " + strconv.Itoa(year), GridProperties: &sheets.GridProperties{ColumnCount: 500, RowCount: 5000}}}}}}
 
 				_, err := srv.Spreadsheets.BatchUpdate(config.SpreadsheetID, &batch).Do()
 				if err != nil {
 					log.Fatalf("Unable to retrieve data from sheet. %v", err)
 				}
+
 			}
 
 			var ur sheets.ValueRange
-			ur.Values = append(ur.Values, []interface{}{"ID", "Name"})
+			ur.Values = append(ur.Values, []interface{}{"EmailID", "Name"})
 
 			var wr sheets.ValueRange
 			wr.Values = append(wr.Values, []interface{}{"TimeSpent - Seconds", "Day " + strconv.Itoa(day) + " - Attendance"})
@@ -181,7 +182,7 @@ func googleSheetScheduler(userList *[]data.UserTimeData, srv *sheets.Service, ma
 			var active string
 
 			for idx := range *userList {
-				ur.Values = append(ur.Values, []interface{}{(*userList)[idx].UserId, (*userList)[idx].Name})
+				ur.Values = append(ur.Values, []interface{}{(*userList)[idx].EmailID, (*userList)[idx].Name})
 				if (*userList)[idx].TotalDuration > config.PresentBreakPoint {
 					active = "Present"
 				} else {
@@ -191,14 +192,20 @@ func googleSheetScheduler(userList *[]data.UserTimeData, srv *sheets.Service, ma
 				wr.Values = append(wr.Values, []interface{}{strconv.Itoa(int((*userList)[idx].TotalDuration)), active})
 			}
 
+			userLength := len(ur.Values)
+
+			userrange = month.String() + " " + strconv.Itoa(year) + "!" + "A1:" + "B" + strconv.Itoa(userLength+1)
+
+			writeRange = month.String() + " " + strconv.Itoa(year) + "!" + utility.GetColumnName(day*3+1) + "1" //+ ":" + utility.GetColumnName(day*3+1+1) + strconv.Itoa(userLength+1)
+
 			_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, userrange, &ur).ValueInputOption("RAW").Do()
 			if err != nil {
-				log.Fatalf("Unable to retrieve data from sheet. %v", err)
+				log.Fatalf("Failed to update user list. %v", err)
 			}
 
 			_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, &wr).ValueInputOption("RAW").Do()
 			if err != nil {
-				log.Fatalf("Unable to retrieve data from sheet. %v", err)
+				log.Fatalf("Failed to write user activity. %v", err)
 			}
 
 			go func() {

@@ -20,6 +20,7 @@ type UserTimeData struct {
 	ActiveEpoch   int64
 	AwayEpoch     int64
 	TotalDuration int64
+	EmailID       string
 }
 
 type TimeStampCustom struct {

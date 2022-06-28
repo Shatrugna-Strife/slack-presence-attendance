@@ -29,6 +29,7 @@ func GetUserMap(api *slack.Client) (*map[string]data.UserTimeData, error) {
 				PresenceState: data.Away,
 				Name:          user.Name,
 				TotalDuration: 0,
+				EmailID:       user.Profile.Email,
 			}
 			// usertimelist = append(usertimelist, temp)
 			usermapData[user.ID] = temp

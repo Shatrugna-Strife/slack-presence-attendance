@@ -16,6 +16,9 @@ dist/
 # exe
 *.exe
 
+# Ubuntu executable file
+slack-user-attendence-app
+
 # Log files
 *.log
 
