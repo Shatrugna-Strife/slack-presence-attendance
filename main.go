@@ -25,33 +25,32 @@ import (
 )
 
 func main() {
-	// appToken := os.Getenv("SLACK_APP_TOKEN")
-	appToken := "xapp-1-A03HM4PJEQK-3611823453777-8d82cbd55cd6343b8125d000868638c799d55bee02af38f08cf216a3e0c797b1"
-	if appToken == "" {
+
+	if config.AppToken == "" {
 		fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must be set.\n")
 		os.Exit(1)
 	}
 
-	if !strings.HasPrefix(appToken, "xapp-") {
+	if !strings.HasPrefix(config.AppToken, "xapp-") {
 		fmt.Fprintf(os.Stderr, "SLACK_APP_TOKEN must have the prefix \"xapp-\".")
+		os.Exit(1)
 	}
 
-	// botToken := os.Getenv("SLACK_BOT_TOKEN")
-	botToken := "xoxb-3584532805223-3592570415062-IzvofH7PCKvE4OFSwBGGz8y6"
-	if botToken == "" {
+	if config.BotToken == "" {
 		fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must be set.\n")
 		os.Exit(1)
 	}
 
-	if !strings.HasPrefix(botToken, "xoxb-") {
+	if !strings.HasPrefix(config.BotToken, "xoxb-") {
 		fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN must have the prefix \"xoxb-\".")
+		os.Exit(1)
 	}
 
 	api := slack.New(
-		botToken,
+		config.BotToken,
 		slack.OptionDebug(true),
 		slack.OptionLog(log.New(os.Stdout, "api: ", log.Lshortfile|log.LstdFlags)),
-		slack.OptionAppLevelToken(appToken),
+		slack.OptionAppLevelToken(config.AppToken),
 	)
 
 	client := socketmode.New(
@@ -59,16 +58,6 @@ func main() {
 		socketmode.OptionDebug(true),
 		socketmode.OptionLog(log.New(os.Stdout, "socketmode: ", log.Lshortfile|log.LstdFlags)),
 	)
-
-	go event(client, api)
-
-	userMap, err := utility.GetUserMap(api)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	userList := utility.GenerateListFromMap(userMap)
-
-	schedulerChannel := make(chan string)
 
 	ctx := context.Background()
 	conf, err := google.JWTConfigFromJSON([]byte(config.GoogleServiceJsonKey), sheets.SpreadsheetsScope)
@@ -78,10 +67,9 @@ func main() {
 	srv, err := sheets.NewService(ctx, option.WithHTTPClient(clientSheet))
 	checkError(err)
 
-	go scheduler(userList, api, schedulerChannel)
+	go dayScheduler(api, srv)
 
-	go googleSheetScheduler(userList, srv)
-
+	go event(client, api)
 	client.Run()
 }
 
@@ -91,94 +79,139 @@ func checkError(err error) {
 	}
 }
 
-func googleSheetScheduler(userList *[]data.UserTimeData, srv *sheets.Service) {
+func dayScheduler(api *slack.Client, srv *sheets.Service) {
+	//declaration
+
+	schedulerChannel := make(chan string)
+
+	sheetschedulerChannel := make(chan string)
+
+	daytempchannel := make(chan bool)
+
+	// false schedulers not running
+	go func() {
+		daytempchannel <- false
+	}()
+
+	// go
+	for dude := range daytempchannel {
+		log.Println(dude)
+		currentTime := time.Now()
+		startTime := time.Date(currentTime.Year(), currentTime.Month(), currentTime.Day(), config.StartTimeStamp.Hour, config.StartTimeStamp.Minute, 0, 0, currentTime.Location())
+		endTime := time.Date(currentTime.Year(), currentTime.Month(), currentTime.Day(), config.EndTimeStamp.Hour, config.EndTimeStamp.Minute, 0, 0, currentTime.Location())
+		if !dude { // false schedulers not running
+			if time.Now().After(startTime) && time.Now().Before(endTime) {
+				// schedulers starting
+				userMap, err := utility.GetUserMap(api)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				userList := utility.GenerateListFromMap(userMap)
+				go scheduler(userList, api, schedulerChannel)
+
+				go googleSheetScheduler(userList, srv, sheetschedulerChannel)
+
+				go func() {
+					time.Sleep(config.DaySchedulerDelay * time.Minute)
+					daytempchannel <- true
+				}()
+			} else { // true schedulers are running
+				go func() {
+					time.Sleep(config.DaySchedulerDelay * time.Minute)
+					daytempchannel <- false
+				}()
+			}
+		} else {
+			if time.Now().After(startTime) && time.Now().Before(endTime) {
+				go func() {
+					time.Sleep(config.DaySchedulerDelay * time.Minute)
+					daytempchannel <- true
+				}()
+			} else {
+				schedulerChannel <- "exit"
+				sheetschedulerChannel <- "exit"
+				go func() {
+					time.Sleep(config.DaySchedulerDelay * time.Minute)
+					daytempchannel <- false
+				}()
+			}
+		}
+
+	}
+}
+
+func googleSheetScheduler(userList *[]data.UserTimeData, srv *sheets.Service, mainChannel chan string) {
+
+	tempChannel := make(chan uint64)
+
+	go func() {
+		tempChannel <- 1
+	}()
 
 	for {
-		month := time.Now().Month()
-		year := time.Now().Year()
+		select {
+		case mainEvent := <-mainChannel:
+			if mainEvent == "exit" {
+				return
+			}
+		case <-tempChannel:
+			month := time.Now().Month()
+			year := time.Now().Year()
+			day := time.Now().Day()
 
-		userrange := month.String() + " " + strconv.Itoa(year) + "!" + "A" + "1"
+			userrange := month.String() + " " + strconv.Itoa(year) + "!" + "A" + "1"
 
-		writeRange := month.String() + " " + strconv.Itoa(year) + "!" + utility.GetColumnName(time.Now().Day()*3+1) + "1"
-		_, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, userrange).Do()
-		if err != nil {
-			batch := sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{&sheets.Request{AddSheet: &sheets.AddSheetRequest{Properties: &sheets.SheetProperties{Title: month.String() + " " + strconv.Itoa(year)}}}}}
+			writeRange := month.String() + " " + strconv.Itoa(year) + "!" + utility.GetColumnName(day*3+1) + "1"
+			_, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, userrange).Do()
+			if err != nil {
+				batch := sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{&sheets.Request{AddSheet: &sheets.AddSheetRequest{Properties: &sheets.SheetProperties{Title: month.String() + " " + strconv.Itoa(year)}}}}}
 
-			_, err := srv.Spreadsheets.BatchUpdate(config.SpreadsheetID, &batch).Do()
+				_, err := srv.Spreadsheets.BatchUpdate(config.SpreadsheetID, &batch).Do()
+				if err != nil {
+					log.Fatalf("Unable to retrieve data from sheet. %v", err)
+				}
+			}
+
+			var ur sheets.ValueRange
+			ur.Values = append(ur.Values, []interface{}{"ID", "Name"})
+
+			var wr sheets.ValueRange
+			wr.Values = append(wr.Values, []interface{}{"TimeSpent - Seconds", "Day " + strconv.Itoa(day) + " - Attendance"})
+
+			var active string
+
+			for idx := range *userList {
+				ur.Values = append(ur.Values, []interface{}{(*userList)[idx].UserId, (*userList)[idx].Name})
+				if (*userList)[idx].TotalDuration > config.PresentBreakPoint {
+					active = "Present"
+				} else {
+					active = "Absent"
+				}
+				log.Println((*userList)[idx])
+				wr.Values = append(wr.Values, []interface{}{strconv.Itoa(int((*userList)[idx].TotalDuration)), active})
+			}
+
+			_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, userrange, &ur).ValueInputOption("RAW").Do()
 			if err != nil {
 				log.Fatalf("Unable to retrieve data from sheet. %v", err)
 			}
-			// _, err = srv.Spreadsheets.Values.Get(config.SpreadsheetID, writeRange).Do()
-			// if err != nil {
-			// 	log.Fatalf("Unable to retrieve data from sheet. %v", err)
-			// }
-		}
 
-		var ur sheets.ValueRange
-		ur.Values = append(ur.Values, []interface{}{"ID", "Name"})
-
-		var wr sheets.ValueRange
-		wr.Values = append(wr.Values, []interface{}{"TimeSpent - Seconds", "Day " + strconv.Itoa(time.Now().Day()) + " - Attendance"})
-
-		var active string
-
-		for idx := range *userList {
-			ur.Values = append(ur.Values, []interface{}{(*userList)[idx].UserId, (*userList)[idx].Name})
-			if (*userList)[idx].TotalDuration > 100 {
-				active = "Present"
-			} else {
-				active = "Absent"
+			_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, &wr).ValueInputOption("RAW").Do()
+			if err != nil {
+				log.Fatalf("Unable to retrieve data from sheet. %v", err)
 			}
-			wr.Values = append(wr.Values, []interface{}{strconv.Itoa(int((*userList)[idx].TotalDuration)), active})
-		}
 
-		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, userrange, &ur).ValueInputOption("RAW").Do()
-		if err != nil {
-			log.Fatalf("Unable to retrieve data from sheet. %v", err)
+			go func() {
+				time.Sleep(config.GoogleSheetSchedulerDelay * time.Second)
+				tempChannel <- 1
+			}()
 		}
-
-		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, &wr).ValueInputOption("RAW").Do()
-		if err != nil {
-			log.Fatalf("Unable to retrieve data from sheet. %v", err)
-		}
-
-		time.Sleep(10 * time.Second)
 
 	}
 
-	// spreadsheetID := "1s0fqIe1k5uRHz6TV9NflCZl0IDu78BJcS1_NWEjmgtQ"
-	// readRange := "IntUnsecured62167!A2:C"
-	// resp, err := srv.Spreadsheets.Values.Get(spreadsheetID, readRange).Do()
-	// checkError(err)
-
-	// if len(resp.Values) == 0 {
-	// 	fmt.Println("No data found.")
-	// } else {
-	// 	fmt.Println("Name, Major:")
-	// 	for _, row := range resp.Values {
-	// 		fmt.Printf("%s, %s\n", row[0], row[1])
-	// 	}
-	// }
-
-	// writeRange := "March 2022!A1"
-
-	// var vr sheets.ValueRange
-
-	// myval := []interface{}{"One", "Two", "Three"}
-	// vr.Values = append(vr.Values, myval)
-
-	// batchUpdate.Do()
-
-	// _, err = srv.Spreadsheets.Values.Update(spreadsheetID, writeRange, )
-	// srv.Spreadsheets.Create()
-	// _, err = srv.Spreadsheets.Values.Update(spreadsheetID, writeRange, &vr).ValueInputOption("RAW").Do()
-	// if err != nil {
-	// 	log.Fatalf("Unable to retrieve data from sheet. %v", err)
-	// }
 }
 
 func scheduler(userList *[]data.UserTimeData, api *slack.Client, mainChannel chan string) {
-	var apiLimitPerMinute int = 50
 
 	currentCount := 0
 
@@ -186,7 +219,7 @@ func scheduler(userList *[]data.UserTimeData, api *slack.Client, mainChannel cha
 
 	apiChannel := make(chan uint64)
 
-	for idx, _ := range *userList {
+	for idx := range *userList {
 		(*userList)[idx].LastChecked = time.Now().Unix()
 	}
 
@@ -206,7 +239,7 @@ func scheduler(userList *[]data.UserTimeData, api *slack.Client, mainChannel cha
 			// log.Println(mainEvent)
 		case dude := <-apiChannel:
 			log.Println(dude)
-			if currentCount == apiLimitPerMinute {
+			if currentCount == config.PresenceApiLimitPerMinute {
 				duration := time.Now().Unix() - start
 				if duration < 60 {
 					currentCount = 0
@@ -233,7 +266,6 @@ func scheduler(userList *[]data.UserTimeData, api *slack.Client, mainChannel cha
 		}
 	}
 
-	fmt.Println(apiLimitPerMinute)
 }
 
 func getUserPresenceGoroutine(user *data.UserTimeData, api *slack.Client, apiChannel chan uint64, index uint64) {
@@ -293,7 +325,7 @@ func event(client *socketmode.Client, api *slack.Client) {
 
 						case *slackevents.AppMentionEvent:
 							log.Println(ev.Text)
-							_, _, err := api.PostMessage(ev.Channel, slack.MsgOptionText("Yes, hello.", false))
+							_, _, err := api.PostMessage(ev.Channel, slack.MsgOptionText("Ignore this noble being, and * ur self", false))
 							if err != nil {
 								fmt.Printf("failed posting message: %v", err)
 							}
@@ -309,5 +341,5 @@ func event(client *socketmode.Client, api *slack.Client) {
 			}
 		}
 	}
-	log.Println("Shit 1")
+	// log.Println("Shit 1")
 }

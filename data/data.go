@@ -22,6 +22,11 @@ type UserTimeData struct {
 	TotalDuration int64
 }
 
+type TimeStampCustom struct {
+	Hour   int // Hours - 24 format
+	Minute int
+}
+
 func test() {
 	t1 := time.Now()
 	log.Println(t1.Unix())

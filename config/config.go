@@ -1,6 +1,13 @@
 package config
 
-const SpreadsheetID = "1s0fqIe1k5uRHz6TV9NflCZl0IDu78BJcS1_NWEjmgtQ"
+import "slack-user-attendence-app/data"
+
+const BotToken = "xoxb-3584532805223-3592570415062-IzvofH7PCKvE4OFSwBGGz8y6"
+
+const AppToken = "xapp-1-A03HM4PJEQK-3611823453777-8d82cbd55cd6343b8125d000868638c799d55bee02af38f08cf216a3e0c797b1"
+
+const SpreadsheetID = "1s0fqIe1k5uRHz6TV9NflCZl0IDu78BJcS1_NWEjmgtQ" // https://docs.google.com/spreadsheets/d/1s0fqIe1k5uRHz6TV9NflCZl0IDu78BJcS1_NWEjmgtQ/edit#gid=1648272376
+// const SpreadsheetID = "1_sFuq-TcGY8aQptOtESdbntiti2yQf4GV9oOXYr1mTQ" // https://docs.google.com/spreadsheets/d/1_sFuq-TcGY8aQptOtESdbntiti2yQf4GV9oOXYr1mTQ/edit#gid=599769247
 
 const GoogleServiceJsonKey = `{
   "type": "service_account",
@@ -14,3 +21,15 @@ const GoogleServiceJsonKey = `{
   "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
   "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/sheetedit%40webrtcproject-341403.iam.gserviceaccount.com"
 }`
+
+var StartTimeStamp = data.TimeStampCustom{Hour: 10, Minute: 0} // Hours - 24 format
+
+var EndTimeStamp = data.TimeStampCustom{Hour: 18, Minute: 30}
+
+const DaySchedulerDelay = 1 // minutes
+
+const GoogleSheetSchedulerDelay = 20 // seconds
+
+const PresenceApiLimitPerMinute = 50
+
+const PresentBreakPoint = 4 * 3600 // Seconds // 4 hours in seconds
